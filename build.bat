@@ -34,22 +34,3 @@ if exist win_process_hider.dll (
 )
 
 :end
-
-:: Open Developer Command Prompt as Administrator first!
-:: Navigate to your hideprocess folder
-cd C:\hideprocess
-
-:: Build the tool
-build.bat
-
-:: Make sure Task Manager is running
-start taskmgr
-
-:: Wait a few seconds for Task Manager to start
-timeout /t 3
-
-:: Run the hiding tool
-hide_simple.bat notepad.exe
-
-:: Start notepad to test
-start notepad
