@@ -1,12 +1,12 @@
 @echo off
-:: Build script for Windows Process Hiding Tool
+REM Build script for Windows Process Hiding Tool
 
 echo ===============================================================
 echo Building Windows Process Hiding Tool - EDUCATIONAL PURPOSE ONLY
 echo ===============================================================
 echo.
 
-:: Check for compiler
+REM Check for compiler
 where cl >nul 2>&1
 if %errorlevel% neq 0 (
     echo ERROR: Microsoft Visual C++ compiler (cl.exe) not found.
@@ -34,3 +34,22 @@ if exist win_process_hider.dll (
 )
 
 :end
+
+:: Open Developer Command Prompt as Administrator first!
+:: Navigate to your hideprocess folder
+cd C:\hideprocess
+
+:: Build the tool
+build.bat
+
+:: Make sure Task Manager is running
+start taskmgr
+
+:: Wait a few seconds for Task Manager to start
+timeout /t 3
+
+:: Run the hiding tool
+hide_simple.bat notepad.exe
+
+:: Start notepad to test
+start notepad
