@@ -16,10 +16,10 @@ if %errorlevel% neq 0 (
 )
 
 echo Building DLL (win_process_hider.dll) for 64-bit...
-cl /LD /MACHINE:X64 win_process_hider.c /link /out:win_process_hider.dll kernel32.lib user32.lib psapi.lib
+cl /LD /MACHINE:X64 win_process_hider_x64.c /link /out:win_process_hider.dll kernel32.lib user32.lib psapi.lib
 
 echo Building injector (win_injector.exe) for 64-bit...
-cl /MACHINE:X64 win_injector.c /link /out:win_injector.exe kernel32.lib user32.lib
+cl /MACHINE:X64 win_injector_x64.c /link /out:win_injector.exe kernel32.lib user32.lib
 
 if exist win_process_hider.dll (
     echo.
