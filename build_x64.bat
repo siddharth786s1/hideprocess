@@ -10,8 +10,8 @@ REM Check for compiler
 where cl >nul 2>&1
 if %errorlevel% neq 0 (
     echo ERROR: Microsoft Visual C++ compiler (cl.exe) not found.
-    echo Please run this from a Visual Studio Developer Command Prompt
-    echo or run vcvarsall.bat to set up the environment.
+    echo Please run this from a Visual Studio x64 Native Tools Command Prompt
+    echo or run vcvarsall.bat with x64 architecture.
     goto end
 )
 
@@ -26,8 +26,8 @@ if exist win_process_hider.dll (
     echo Build successful!
     echo.
     echo Usage:
-    echo   hide_process.bat ^<process_to_hide^>
-    echo   Example: hide_process.bat notepad.exe
+    echo   run_tool_x64.bat ^<process_to_hide^>
+    echo   Example: run_tool_x64.bat notepad.exe
 ) else (
     echo.
     echo Build failed!

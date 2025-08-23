@@ -2,6 +2,16 @@
 
 This guide provides instructions for using the Process Hiding Tool specifically on Windows 11 64-bit systems.
 
+## IMPORTANT: Fixing "Unsupported 16-Bit Application" Error
+
+If you see the error message "The program or feature cannot start or run due to incompatibility with 64-bit versions of Windows", follow these specific steps:
+
+1. You **MUST** use the **x64 Native Tools Command Prompt for VS 2022** (not regular Command Prompt)
+2. You **MUST** run as Administrator
+3. You **MUST** use the build_x64.bat script which properly flags the binaries for 64-bit
+
+See the WINDOWS11_64BIT_GUIDE.md file for complete instructions to fix this error.
+
 ## Prerequisites
 
 1. Windows 11 64-bit (or Windows 10 64-bit)
