@@ -46,12 +46,16 @@ if %ERRORLEVEL% NEQ 0 (
 echo.
 
 REM Check if 64-bit building is possible
-cl 2>&1 | findstr /C:"x64" >nul
-if %ERRORLEVEL% EQU 0 (
-    echo Your environment supports 64-bit compilation. Good!
+if defined VSCMD_ARG_TGT_ARCH (
+    if /I "%VSCMD_ARG_TGT_ARCH%"=="x64" (
+        echo You are in a proper x64 Native Tools Command Prompt. Excellent!
+    ) else (
+        echo WARNING: You are in a Visual Studio Command Prompt, but not the x64 one.
+        echo Please run the "x64 Native Tools Command Prompt for VS 2022" as Administrator.
+    )
 ) else (
-    echo WARNING: Your environment may not support 64-bit compilation.
-    echo Please run the Visual Studio Developer Command Prompt for x64.
+    echo WARNING: You are not in a Visual Studio Command Prompt.
+    echo Please run the "x64 Native Tools Command Prompt for VS 2022" as Administrator.
 )
 
 echo.

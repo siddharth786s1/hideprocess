@@ -1,118 +1,73 @@
 @echo off
-REM All-in-one script for Windows 11 64-bit Process Hiding Tool
+REM Windows 11 64-bit batch file
 
 echo ===============================================================
-echo Windows 11 64-bit Process Hiding Tool - ALL-IN-ONE LAUNCHER
+echo Windows 11 64-bit Process Hiding Tool - EDUCATIONAL PURPOSE ONLY
 echo ===============================================================
 echo.
 
-REM Process to hide (default to notepad.exe if not provided)
-if "%1"=="" (
-    set PROCESS_TO_HIDE=notepad.exe
-    echo No process specified, defaulting to: notepad.exe
-    echo.
-    echo To hide a different process, run: %0 process_name.exe
-    echo.
-) else (
-    set PROCESS_TO_HIDE=%1
-)
-
-REM Check if we're running as administrator
-echo Checking administrator privileges...
-net session >nul 2>&1
-if %errorlevel% neq 0 (
-    echo ERROR: This script requires administrator privileges.
-    echo.
-    echo Please right-click on the Command Prompt or PowerShell and select
-    echo "Run as administrator", then try again.
+REM Check if we're on Windows 11
+for /f "tokens=4-5 delims=[.] " %%i in ('ver') do set VERSION=%%i.%%j
+if not "%VERSION%" GEQ "10.0" (
+    echo ERROR: This tool requires Windows 10 or newer.
     goto end
 )
 
-REM Check for x64 environment
-echo Checking for 64-bit environment...
-if not defined VSCMD_ARG_TGT_ARCH (
-    echo WARNING: This does not appear to be a Visual Studio Command Prompt.
-    echo Results may vary.
-    echo.
+REM Check if we're on 64-bit Windows
+reg Query "HKLM\Hardware\Description\System\CentralProcessor\0" | find /i "x86" > NUL && set OS=32BIT || set OS=64BIT
+if %OS%==32BIT (
+    echo ERROR: This tool requires 64-bit Windows.
+    goto end
 )
 
-REM Build the tools if needed
-echo Checking for compiled tools...
+REM Check if we're running as Administrator
+net session >nul 2>&1
+if %errorlevel% neq 0 (
+    echo ERROR: This script requires administrator privileges.
+    echo Please right-click and select "Run as administrator"
+    goto end
+)
+
+REM Check if we're in the correct command prompt
+if not defined VSCMD_ARG_TGT_ARCH (
+    echo ERROR: This script must be run from an x64 Native Tools Command Prompt.
+    echo Please follow these steps:
+    echo 1. Search for "x64 Native Tools Command Prompt for VS" in Start menu
+    echo 2. Right-click and select "Run as administrator"
+    echo 3. Navigate to this directory and try again
+    goto end
+)
+
+if /I not "%VSCMD_ARG_TGT_ARCH%"=="x64" (
+    echo ERROR: This is not an x64 build environment.
+    echo Please use the x64 Native Tools Command Prompt.
+    goto end
+)
+
+REM Check if files exist and build if needed
 if not exist win_process_hider.dll (
-    echo Need to build the tools first.
-    echo.
-    
-    REM Check for compiler
-    where cl >nul 2>&1
-    if %errorlevel% neq 0 (
-        echo ERROR: Microsoft Visual C++ compiler (cl.exe) not found.
-        echo.
-        echo Please run this from a Visual Studio x64 Native Tools Command Prompt:
-        echo 1. Search for "x64 Native" in the Start menu
-        echo 2. Right-click on "x64 Native Tools Command Prompt for VS"
-        echo 3. Select "Run as administrator"
-        echo 4. Navigate to this directory and try again
+    echo DLL not found. Building...
+    call build_x64.bat
+    if not exist win_process_hider.dll (
+        echo ERROR: Build failed. Cannot continue.
         goto end
     )
-    
-    echo Building 64-bit tools...
-    echo.
-    
-    echo Building DLL (win_process_hider.dll)...
-    cl /LD /MACHINE:X64 win_process_hider_x64.c /link /out:win_process_hider.dll kernel32.lib user32.lib psapi.lib
-    if %errorlevel% neq 0 goto build_failed
-    
-    echo Building injector (win_injector.exe)...
-    cl /MACHINE:X64 win_injector_x64.c /link /out:win_injector.exe kernel32.lib user32.lib
-    if %errorlevel% neq 0 goto build_failed
-    
-    echo.
-    echo Build completed successfully!
-    echo.
-) else (
-    echo Found existing compiled tools.
 )
 
-REM Make sure Task Manager is running
-echo Starting Task Manager...
-start taskmgr
+if not exist win_injector.exe (
+    echo Injector not found. Building...
+    call build_x64.bat
+    if not exist win_injector.exe (
+        echo ERROR: Build failed. Cannot continue.
+        goto end
+    )
+)
 
-REM Wait a few seconds
-echo Waiting for Task Manager to initialize...
-timeout /t 5 >nul
-
-REM Run the hiding tool
-echo Running process hiding tool for %PROCESS_TO_HIDE%...
-win_injector.exe %PROCESS_TO_HIDE%
-if %errorlevel% neq 0 goto run_failed
-
-REM Start the target process to test
-echo Starting %PROCESS_TO_HIDE% for testing...
-start %PROCESS_TO_HIDE%
-
+echo Everything looks good! Your system is correctly set up for the tool.
 echo.
-echo SUCCESS! Check Task Manager - %PROCESS_TO_HIDE% should be hidden!
-echo.
-echo NOTE: If you don't see Task Manager, it may be minimized to the taskbar.
-echo.
-echo IMPORTANT: You will need to restart Task Manager to see hidden processes again.
-goto end
-
-:build_failed
-echo.
-echo ERROR: Build failed!
-echo.
-echo Please make sure you're running from an x64 Native Tools Command Prompt.
-goto end
-
-:run_failed
-echo.
-echo ERROR: Failed to run the process hiding tool!
-echo.
-echo Please check the output above for error messages.
-goto end
+echo To hide a process, use:
+echo   run_tool_x64.bat ^<process_name^>
+echo   Example: run_tool_x64.bat notepad.exe
 
 :end
-echo.
-echo ===============================================================
 pause
