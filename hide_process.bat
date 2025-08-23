@@ -1,5 +1,4 @@
 @echo off
-:: filepath: hide_process.bat
 :: Windows Process Hiding Tool - EDUCATIONAL PURPOSE ONLY
 :: Helper script to simplify usage
 
@@ -29,18 +28,18 @@ echo Target process to hide: %1
 echo.
 echo Checking if target monitoring tools are running...
 
-:: Check if any monitoring tool is running
+:: Improved detection for Task Manager and other tools
 set TOOL_RUNNING=0
-tasklist | findstr /i "taskmgr.exe" >nul 2>&1
+tasklist /fi "imagename eq taskmgr.exe" | find /i "taskmgr.exe" >nul
 if %errorlevel% equ 0 set TOOL_RUNNING=1
 
-tasklist | findstr /i "procexp.exe" >nul 2>&1
+tasklist /fi "imagename eq procexp.exe" | find /i "procexp.exe" >nul
 if %errorlevel% equ 0 set TOOL_RUNNING=1
 
-tasklist | findstr /i "procexp64.exe" >nul 2>&1
+tasklist /fi "imagename eq procexp64.exe" | find /i "procexp64.exe" >nul
 if %errorlevel% equ 0 set TOOL_RUNNING=1
 
-tasklist | findstr /i "ProcessHacker.exe" >nul 2>&1
+tasklist /fi "imagename eq ProcessHacker.exe" | find /i "ProcessHacker.exe" >nul
 if %errorlevel% equ 0 set TOOL_RUNNING=1
 
 if %TOOL_RUNNING% equ 0 (
@@ -51,6 +50,19 @@ if %TOOL_RUNNING% equ 0 (
     echo - Process Hacker (ProcessHacker.exe)
     echo.
     echo Then run this script again.
+    goto end
+)
+
+:: Check if DLL and injector exist
+if not exist win_process_hider.dll (
+    echo ERROR: win_process_hider.dll not found.
+    echo Please run build.bat first to compile the code.
+    goto end
+)
+
+if not exist win_injector.exe (
+    echo ERROR: win_injector.exe not found.
+    echo Please run build.bat first to compile the code.
     goto end
 )
 

@@ -1,0 +1,36 @@
+WINDOWS PROCESS HIDING TOOL - INSTRUCTIONS
+========================================
+
+Step 1: Open a Visual Studio Developer Command Prompt as Administrator
+       - Search for "Developer Command Prompt" in Start menu
+       - Right-click and select "Run as Administrator"
+
+Step 2: Navigate to this directory
+       - cd path\to\hideprocess
+
+Step 3: Run the troubleshooting script first
+       - troubleshoot.bat
+       - This will check if everything is properly set up
+
+Step 4: Build the tool
+       - build.bat
+
+Step 5: Open Task Manager
+       - start taskmgr
+
+Step 6: Run the hiding tool (choose one):
+       - hide_process.bat notepad.exe (full version with checks)
+       - hide_simple.bat notepad.exe (simplified version)
+
+Step 7: Test by starting Notepad
+       - start notepad
+
+Step 8: Check Task Manager - Notepad should be hidden!
+
+TROUBLESHOOTING:
+- Make sure you're running as Administrator
+- Make sure Task Manager is running before you run hide_process.bat
+- Make sure you're in a Visual Studio Developer Command Prompt
+- If hide_process.bat doesn't work, try the simplified hide_simple.bat
+
+For educational purposes only.

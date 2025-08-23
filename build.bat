@@ -1,5 +1,4 @@
 @echo off
-:: filepath: build.bat
 :: Build script for Windows Process Hiding Tool
 
 echo ===============================================================
@@ -17,10 +16,10 @@ if %errorlevel% neq 0 (
 )
 
 echo Building DLL (win_process_hider.dll)...
-cl /LD win_process_hider.c /link /out:win_process_hider.dll kernel32.lib user32.lib
+cl /LD win_process_hider.c /link /out:win_process_hider.dll kernel32.lib user32.lib psapi.lib
 
 echo Building injector (win_injector.exe)...
-cl win_injector.c /link /out:win_injector.exe
+cl win_injector.c /link /out:win_injector.exe kernel32.lib user32.lib
 
 if exist win_process_hider.dll (
     echo.
