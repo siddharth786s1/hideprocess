@@ -5,8 +5,8 @@
  * like Task Manager, Process Explorer, etc.
  */
 
-#define UNICODE
-#define _UNICODE
+// Diagnostic-only main to ensure correct 64-bit build and report issues.
+// This intentionally does NOT perform any injection.
 #include <windows.h>
 #include <stdio.h>
 
