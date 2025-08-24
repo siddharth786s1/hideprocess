@@ -26,7 +26,7 @@ BOOL InjectDLL(DWORD processId, const char* dllPath) {
     hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, processId);
     if (!hProcess) {
         printf("Error: Could not open process (PID: %lu) - Error code: %lu\n", 
-               processId, GetLastError());
+               (unsigned long)processId, (unsigned long)GetLastError());
         return FALSE;
     }
     
@@ -35,7 +35,7 @@ BOOL InjectDLL(DWORD processId, const char* dllPath) {
                                MEM_COMMIT, PAGE_READWRITE);
     if (!pRemoteBuf) {
         printf("Error: Could not allocate memory in remote process - Error code: %lu\n", 
-               GetLastError());
+               (unsigned long)GetLastError());
         CloseHandle(hProcess);
         return FALSE;
     }
@@ -44,7 +44,7 @@ BOOL InjectDLL(DWORD processId, const char* dllPath) {
     if (!WriteProcessMemory(hProcess, pRemoteBuf, (LPVOID)dllPath, 
                            lstrlenA(dllPath) + 1, &bytesWritten)) {
         printf("Error: Could not write to remote process memory - Error code: %lu\n", 
-               GetLastError());
+               (unsigned long)GetLastError());
         VirtualFreeEx(hProcess, pRemoteBuf, 0, MEM_RELEASE);
         CloseHandle(hProcess);
         return FALSE;
@@ -55,7 +55,7 @@ BOOL InjectDLL(DWORD processId, const char* dllPath) {
         GetModuleHandleA("kernel32.dll"), "LoadLibraryA");
     if (!pThreadProc) {
         printf("Error: Could not get address of LoadLibraryA - Error code: %lu\n", 
-               GetLastError());
+               (unsigned long)GetLastError());
         VirtualFreeEx(hProcess, pRemoteBuf, 0, MEM_RELEASE);
         CloseHandle(hProcess);
         return FALSE;
@@ -66,7 +66,7 @@ BOOL InjectDLL(DWORD processId, const char* dllPath) {
                                 pRemoteBuf, 0, NULL);
     if (!hThread) {
         printf("Error: Could not create remote thread - Error code: %lu\n", 
-               GetLastError());
+               (unsigned long)GetLastError());
         VirtualFreeEx(hProcess, pRemoteBuf, 0, MEM_RELEASE);
         CloseHandle(hProcess);
         return FALSE;
@@ -140,7 +140,7 @@ void InjectIntoMonitoringTools(const char* targetProcess) {
             _stricmp(pe32.szExeFile, "ProcessHacker.exe") == 0) {
             
             printf("Found monitoring tool: %s (PID: %lu)\n", 
-                   pe32.szExeFile, pe32.th32ProcessID);
+                   pe32.szExeFile, (unsigned long)pe32.th32ProcessID);
             
             // Inject the DLL
             printf("Injecting into %s...\n", pe32.szExeFile);

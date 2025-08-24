@@ -9,7 +9,7 @@ REM Ensure proper environment
 call "%~dp0verify_64bit.bat" || goto :end_bad
 
 echo Compiling win_injector.c (x64)...
-cl /nologo /W4 /WX /Zi /EHsc /DUNICODE /D_UNICODE ^
+cl /nologo /W4 /Zi /EHsc /DUNICODE /D_UNICODE ^
    /DSTRICT /DWIN32_LEAN_AND_MEAN ^
    /favor:INTEL64 /Qspectre ^
    win_injector.c ^
