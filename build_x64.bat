@@ -1,24 +1,23 @@
 @echo off
 setlocal
 echo ===============================================================
-echo Building Windows Process Tool (x64 diagnostics build)
+echo Building Windows Process Tool (x64)
 echo ===============================================================
 echo.
 
 REM Ensure proper environment
 call "%~dp0verify_64bit.bat" || goto :end_bad
 
-echo Compiling win_injector.c (x64) with diagnostics...
+echo Compiling win_injector.c (x64)...
 cl /nologo /W4 /WX /Zi /EHsc /DUNICODE /D_UNICODE ^
    /DSTRICT /DWIN32_LEAN_AND_MEAN ^
-   /D_BUILD_MUST_BE_X64=1 ^
    /favor:INTEL64 /Qspectre ^
    win_injector.c ^
    /link /MACHINE:X64 /OUT:win_injector.exe
 
 if errorlevel 1 goto :end_bad
 
-echo Compiling win_process_hider.c (x64) placeholder...
+echo Compiling win_process_hider.c (x64)...
 if exist win_process_hider.c (
   cl /nologo /W4 /Zi /EHsc /DUNICODE /D_UNICODE ^
      /DSTRICT /DWIN32_LEAN_AND_MEAN ^
@@ -42,4 +41,3 @@ exit /b 0
 echo.
 echo [ERROR] Build failed or environment not x64.
 exit /b 1
-@REM siddharth
