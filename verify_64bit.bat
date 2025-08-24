@@ -1,98 +1,69 @@
 @echo off
-REM 64-bit verification script for Windows Process Hiding Tool
-
+setlocal enabledelayedexpansion
 echo ===============================================================
 echo 64-bit Environment Verification Tool
 echo ===============================================================
 echo.
 
-echo Checking Windows architecture...
+REM 1) OS
+echo [1/4] Checking Windows architecture...
 if defined ProgramFiles(x86) (
-    echo [OK] Running on 64-bit Windows
+  echo   [OK] 64-bit Windows detected
 ) else (
-    echo [ERROR] Not running on 64-bit Windows
-    echo You need a 64-bit Windows system for this tool to work correctly.
-    goto end
+  echo   [ERROR] This system is not 64-bit Windows
+  goto :end_bad
 )
 
+REM 2) VS prompt + target arch
 echo.
-echo Checking command prompt type...
+echo [2/4] Checking Visual Studio command prompt...
+if defined VSINSTALLDIR (
+  echo   [OK] VS command prompt detected
+) else (
+  echo   [ERROR] Not a VS command prompt. Open "x64 Native Tools Command Prompt for VS 2022" as Administrator.
+  goto :end_bad
+)
+
 if defined VSCMD_ARG_TGT_ARCH (
-    echo [OK] Running in a Visual Studio Command Prompt
-    echo Current architecture target: %VSCMD_ARG_TGT_ARCH%
-    
-    if /I "%VSCMD_ARG_TGT_ARCH%"=="x64" (
-        echo [OK] Correctly using x64 architecture target
-    ) else (
-        echo [ERROR] Not using x64 architecture target
-        echo Please use the x64 Native Tools Command Prompt
-        goto end
-    )
+  echo   Current target architecture: %VSCMD_ARG_TGT_ARCH%
+  if /I not "%VSCMD_ARG_TGT_ARCH%"=="x64" (
+    echo   [ERROR] Using x86 target. Run: force_x64.bat
+    goto :end_bad
+  ) else (
+    echo   [OK] x64 target in effect
+  )
 ) else (
-    echo [ERROR] Not running in a Visual Studio Command Prompt
-    echo Please use the x64 Native Tools Command Prompt
-    goto end
+  echo   [WARN] VS env present but no VSCMD_ARG_TGT_ARCH. Run: force_x64.bat
+  goto :end_bad
 )
 
+REM 3) Compiler
 echo.
-echo Checking for 64-bit compiler...
+echo [3/4] Checking for MSVC compiler (cl)...
 where cl >nul 2>&1
-if %errorlevel% equ 0 (
-    echo [OK] Found Visual C++ compiler
-    
-    REM Create a test file
-    echo #include ^<stdio.h^> > test_arch.c
-    echo int main() { printf("%%d\n", sizeof(void*)); return 0; } >> test_arch.c
-    
-    REM Compile and run it
-    cl /nologo test_arch.c /out:test_arch.exe >nul 2>&1
-    for /f %%i in ('test_arch.exe') do set PTR_SIZE=%%i
-    
-    if "%PTR_SIZE%"=="8" (
-        echo [OK] Compiler is generating 64-bit code (pointer size: 8 bytes)
-    ) else (
-        echo [ERROR] Compiler is NOT generating 64-bit code (pointer size: %PTR_SIZE% bytes)
-        echo Please use the x64 Native Tools Command Prompt
-        goto cleanup
-    )
-    
-    REM Clean up
-    del test_arch.c test_arch.exe test_arch.obj >nul 2>&1
+if errorlevel 1 (
+  echo   [ERROR] cl.exe not found. Install VS Build Tools or reopen the VS x64 Native Tools prompt.
+  goto :end_bad
 ) else (
-    echo [ERROR] Visual C++ compiler not found
-    echo Please use the x64 Native Tools Command Prompt
-    goto end
+  echo   [OK] cl.exe found
+)
+
+REM 4) dumpbin (optional but useful)
+echo.
+echo [4/4] Checking dumpbin (for binary header checks)...
+where dumpbin >nul 2>&1
+if errorlevel 1 (
+  echo   [WARN] dumpbin not found. Header checks will be limited.
+) else (
+  echo   [OK] dumpbin found
 )
 
 echo.
-echo Checking for source files...
-if exist win_process_hider_x64.c (
-    echo [OK] Found win_process_hider_x64.c
-) else (
-    echo [ERROR] Could not find win_process_hider_x64.c
-    echo This file is required for 64-bit compilation.
-    goto end
-)
+echo All checks passed for 64-bit build.
+goto :eof
 
-if exist win_injector_x64.c (
-    echo [OK] Found win_injector_x64.c
-) else (
-    echo [ERROR] Could not find win_injector_x64.c
-    echo This file is required for 64-bit compilation.
-    goto end
-)
-
+:end_bad
 echo.
-echo [SUCCESS] Your environment is correctly set up for 64-bit compilation.
-echo You can now run build_x64.bat to compile the 64-bit version.
-echo.
-echo After building, use run_tool_x64.bat to run the tool.
-goto end
-
-:cleanup
-del test_arch.c test_arch.exe test_arch.obj >nul 2>&1
-
-:end
-echo.
-echo ===============================================================
-pause
+echo One or more checks failed. Open "x64 Native Tools Command Prompt for VS 2022"
+echo as Administrator, then run: force_x64.bat, verify_64bit.bat, build_x64.bat
+exit /b 1
