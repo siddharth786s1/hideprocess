@@ -1,43 +1,63 @@
 @echo off
-setlocal
+setlocal enabledelayedexpansion
+
 echo ===============================================================
-echo Building Windows Process Tool (x64)
+echo Windows Process Hiding Tool - BULLETPROOF BUILD SCRIPT
 echo ===============================================================
-echo.
 
-REM Ensure proper environment
-call "%~dp0verify_64bit.bat" || goto :end_bad
-
-echo Compiling win_injector.c (x64)...
-cl /nologo /W4 /Zi /EHsc /DUNICODE /D_UNICODE ^
-   /DSTRICT /DWIN32_LEAN_AND_MEAN ^
-   /favor:INTEL64 /Qspectre ^
-   win_injector.c ^
-   /link /MACHINE:X64 /OUT:win_injector.exe
-
-if errorlevel 1 goto :end_bad
-
-echo Compiling win_process_hider.c (x64)...
-if exist win_process_hider.c (
-  cl /nologo /W4 /Zi /EHsc /DUNICODE /D_UNICODE ^
-     /DSTRICT /DWIN32_LEAN_AND_MEAN ^
-     /favor:INTEL64 /Qspectre ^
-     /LD win_process_hider.c ^
-     /link /MACHINE:X64 /OUT:win_process_hider.dll
-  if errorlevel 1 goto :end_bad
-) else (
-  echo [WARN] win_process_hider.c not present; skipping DLL.
+REM Check if we're in x64 environment
+if not "%VSCMD_ARG_TGT_ARCH%"=="x64" (
+    echo [ERROR] Not in x64 build environment!
+    echo Please run from "x64 Native Tools Command Prompt for VS 2022"
+    exit /b 1
 )
 
-echo.
-call "%~dp0check_binaries.bat"
-if errorlevel 1 goto :end_bad
+REM Check if source files exist
+if not exist "win_injector.c" (
+    echo [ERROR] win_injector.c not found!
+    exit /b 1
+)
+if not exist "win_process_hider.c" (
+    echo [ERROR] win_process_hider.c not found!
+    exit /b 1
+)
 
-echo.
-echo [OK] Build completed successfully.
-exit /b 0
+echo [INFO] Building win_injector.exe...
+cl /nologo /W3 /O2 /MT /DUNICODE /D_UNICODE ^
+   win_injector.c ^
+   /link /MACHINE:X64 /OUT:win_injector.exe ^
+   kernel32.lib user32.lib psapi.lib advapi32.lib
 
-:end_bad
-echo.
-echo [ERROR] Build failed or environment not x64.
-exit /b 1
+if !errorlevel! neq 0 (
+    echo [ERROR] Failed to build win_injector.exe
+    exit /b 1
+)
+
+echo [INFO] Building win_process_hider.dll...
+cl /nologo /W3 /O2 /MT /DUNICODE /D_UNICODE ^
+   /LD win_process_hider.c ^
+   /link /MACHINE:X64 /OUT:win_process_hider.dll ^
+   kernel32.lib user32.lib psapi.lib
+
+if !errorlevel! neq 0 (
+    echo [ERROR] Failed to build win_process_hider.dll
+    exit /b 1
+)
+
+echo [SUCCESS] Build completed successfully!
+echo [INFO] Files created:
+if exist win_injector.exe echo   ✓ win_injector.exe
+if exist win_process_hider.dll echo   ✓ win_process_hider.dll
+
+REM Verify they're actually 64-bit
+echo [INFO] Verifying 64-bit binaries...
+where dumpbin >nul 2>&1 && (
+    dumpbin /headers win_injector.exe | findstr "machine" | findstr "x64" >nul && (
+        echo   ✓ win_injector.exe is 64-bit
+    ) || (
+        echo   ❌ win_injector.exe is NOT 64-bit
+        exit /b 1
+    )
+)
+
+pause
