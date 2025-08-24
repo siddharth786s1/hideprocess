@@ -221,7 +221,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD dwReason, LPVOID lpReserved) {
             
             if (g_dwTargetPID != 0) {
                 WCHAR logMsg[256];
-                swprintf_s(logMsg, 256, L"Found notepad.exe with PID: %lu", g_dwTargetPID);
+                wsprintfW(logMsg, L"Found notepad.exe with PID: %lu", g_dwTargetPID);
                 LogToFile(logMsg);
                 
                 // Install hooks
